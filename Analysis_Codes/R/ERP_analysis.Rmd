@@ -1,0 +1,452 @@
+---
+title: "MW-EEG project: ERP-analyses"
+author: "J.Simola"
+date: "2022-09-28"
+output: html_document
+---
+
+
+```{r}
+library(lme4)
+library(lmerTest)
+library(readr)
+library(sjPlot) # table functions
+library(dplyr)
+library(ggplot2)
+library(rcompanion) # plot normal histogram
+library(emmeans) # follow-up analysis - pairwise comparisons for factors
+```
+
+```{r}
+rm(list = ls()) # clear workspace
+```
+
+## 1. Load ERP averages for all non-target (NT) stimuli at parietal electrodes - open file AvgERP.RData 
+
+# Plot distributions and prepare data for analyses
+```{r}
+plotNormalHistogram(D0_avg$ampl_300_500) 
+shapiro.test(D0_avg$ampl_300_500)
+
+D1_avg <- D0_avg
+D1_avg$cond <- factor(D1_avg$cond, labels = c("0 back","1 back")) 
+D1_avg$run <- factor(D1_avg$run)
+D1_avg$electrode <- factor(D1_avg$electrode)
+D1_avg
+```
+
+# Descriptive results (Table 3) 
+```{r}
+D1_avg %>%
+  group_by(run,cond) %>% 
+  summarise(mean_amp = mean(ampl_300_500),
+            sd_amp = sd(ampl_300_500))
+```
+
+
+# Predicting P3 amplitudes with task condition, session and electrode location using an LMM 
+```{r}
+m0 <- lmer(ampl_300_500 ~ 1 + (1 + cond | subj), data=D1_avg, REML = FALSE) # null model - random slope model 
+m1 <- lmer(ampl_300_500 ~ cond + (1 + cond | subj), data=D1_avg, REML = FALSE)
+m2 <- lmer(ampl_300_500 ~ cond + run + (1 + cond | subj), data=D1_avg, REML = FALSE)
+m3 <- lmer(ampl_300_500 ~ cond * run + (1 + cond | subj), data=D1_avg, REML = FALSE)
+m4 <- lmer(ampl_300_500 ~ cond + run + electrode + (1 + cond | subj), data=D1_avg, REML = FALSE)
+m5 <- lmer(ampl_300_500 ~ cond * run * electrode + (1 + cond | subj), data=D1_avg, REML = FALSE)
+
+## sequential comparison of models with the likelihood ratio test
+anova(m0, m1, m2, m4, test = "LRT")
+anova(m2, m3, test = "LRT")
+anova(m4, m5, test = "LRT")
+
+# m2 is the best model
+summary(m2 <- lmer(ampl_300_500 ~ run + cond + (1 + cond | subj), data=D1_avg)) 
+confint(m2, method = "Wald") # create confidence intervals
+
+#investigate session main effect
+levels(D1_avg$run) # check baseline - run 0 (session without TPs)
+
+D1_avg$run <- relevel(D1_avg$run, 3)
+levels(D1_avg$run) # check baseline 
+
+summary(m2.1 <- lmer(ampl_300_500 ~ run + cond + (1+cond | subj), data=D1_avg)) 
+confint(m2.1, method = "Wald") # create confidence intervals
+```
+
+
+
+# Test whether the effect of condition was observed during each session? 
+```{r}
+# divide data into sessions
+D1_session1 <- filter(D1_avg, run == 0) # analyse session 1
+D1_session2 <- filter(D1_avg, run == 1) # analyse session 2
+D1_session3 <- filter(D1_avg, run == 2) # analyse session 3
+
+
+# analyse effect of task separately for each session
+summary(p3.s1 <- lmer(ampl_300_500 ~ cond + (1+cond | subj), data=D1_session1))
+confint(p3.s1, method = "Wald") 
+summary(p3.s2 <- lmer(ampl_300_500 ~ cond + (1+cond | subj), data=D1_session2))
+confint(p3.s2, method = "Wald") 
+summary(p3.s3 <- lmer(ampl_300_500 ~ cond + (1+cond | subj), data=D1_session3))
+confint(p3.s3, method = "Wald") 
+```
+
+
+
+## 2. Load single-trial ERP data separated by elapsed time since the last target trial - open file beforeTargetERP.RData 
+
+# Prepare data for analysis
+```{r}
+D1_NTord <- D0_NTord[complete.cases(D0_NTord), ] # exclude NAs
+D1_NTord$run <- factor(D1_NTord$run)
+
+D1_NTord <- filter(D1_NTord, event != 6) # exclude outlier level 
+D1_NTord$cond <- factor(D1_NTord$event, labels = c("0 back","1 back")) # rename events
+levels(D1_NTord$cond)
+
+D1_NTord <- filter(D1_NTord, NT_ord >= 2 & NT_ord <= 6)
+
+# remove Pz amplitude outliers by 1.5*IQR range
+Q <- quantile(D1_NTord$Pz, probs=c(.25, .75), na.rm = FALSE)
+iqr <- IQR(D1_NTord$Pz)
+D1_NTord <- subset(D1_NTord, D1_NTord$Pz > (Q[1] - 1.5*iqr) & D1_NTord$Pz < (Q[2]+1.5*iqr))
+
+# test normality
+plotNormalHistogram(D1_NTord$Pz) 
+shapiro.test(D1_NTord$Pz)
+
+plotNormalHistogram(D1_NTord$Pz_latency) # not normally distributed
+shapiro.test(D1_NTord$Pz_latency)
+
+D1_NTord
+
+# Proportion of excluded data
+# (4813-4733)/4813 = 0.01662165 
+```
+
+# Predicting P3 amplitudes with task, session and elapsed time using an LMM 
+```{r}
+m0 <- lmer(Pz ~ 1 + (1 + cond | subj), data=D1_NTord, REML = FALSE) # null model - random slope model
+m1 <- lmer(Pz ~ cond + (1 + cond | subj), data=D1_NTord, REML = FALSE) 
+# model failed to converge -> optimizer added
+m1 <- lmer(Pz ~ cond + (1 + cond | subj), data=D1_NTord, REML = FALSE, control = lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun=2e5))) 
+isSingular(m1) # TRUE -> random slopes removed from the model and start from the null model
+m2 <- lmer(Pz ~ 1 + (1 | subj), data=D1_NTord, REML = FALSE) 
+m3 <- lmer(Pz ~ cond + (1 | subj), data=D1_NTord, REML = FALSE) 
+m4 <- lmer(Pz ~ cond + run + (1 | subj), data=D1_NTord, REML = FALSE) 
+m5 <- lmer(Pz ~ cond + run + NT_ord + (1 | subj), data=D1_NTord, REML = FALSE) 
+m6 <- lmer(Pz ~ cond * run + (1 | subj), data=D1_NTord, REML = FALSE)
+m7 <- lmer(Pz ~ cond * run * NT_ord + (1 | subj), data=D1_NTord, REML = FALSE) 
+
+# compare models with likelihood ratio test
+anova(m2, m3, m4, m5, test = "LRT")
+anova(m4, m6, test = "LRT") # compare interaction models to those with main effects
+anova(m5, m7, test = "LRT") 
+
+# m5 is the best model
+summary(m5 <- lmer(Pz ~ cond + run + NT_ord + (1 | subj), data=D1_NTord)) 
+confint(m5, method = "Wald") # create confidence intervals
+
+#investigate session main effect
+D1_NTord$run <- relevel(D1_NTord$run, 3)
+levels(D1_NTord$run) # check baseline 
+
+summary(m5.1 <- lmer(Pz ~ cond + run + NT_ord + (1 | subj), data=D1_NTord)) 
+confint(m5.1, method = "Wald") # create confidence intervals
+```
+
+
+# Figure 4: Plot Pz amplitudes as a function of time and task separately for each session
+```{r}
+DAT <- filter(D1_NTord, run == 2) # choose by run
+
+# run custom function to extract standard error (SE) below first
+DAT.1 <- summarySE(DAT, measurevar="Pz", groupvars=c("cond","NT_ord")) 
+DAT.1
+
+setEPS()
+postscript("plots/Pz_by_cond_NT_ord_session3.eps")
+ggplot(DAT.1, aes(x = NT_ord, y = Pz, color=cond)) +
+  geom_errorbar(aes(ymin=Pz-se, ymax=Pz+se), width=.1) + 
+  scale_color_manual(values=c('darkgrey','black')) +
+  ylab("P3 - session3") +
+  xlab("Elapsed # trials") +
+  geom_line() +
+  geom_point() +
+  theme_void() +
+  theme_bw()
+
+dev.off()
+```
+
+# Note! Relationship between P3 amplitudes and task performance is done in BehavioralData_analysis.Rmd
+
+
+## 3. Load single-trial ERP data related to thought probes - open file beforeTP_ERP.RData 
+
+
+# Prepare TP related ERP data for analysis
+```{r}
+D1 <- D0
+D1$event <- factor(D1$event)
+
+D1$cond <- factor(D1$event, labels = c("0 back","1 back")) 
+D1$run <- factor(D1$run)
+
+# remove NAs
+D1 <- D1[complete.cases(D1), ] 
+
+D1 <- filter(D1, NT_ord >= 2 & NT_ord <= 6)
+hist(D1$NT_ord)
+
+# ---- ERP latency data -------- 
+D1_lat <- D1
+# remove Pz latency outliers by 1.5*IQR range - doesn't remove outliers - omitted
+Q <- quantile(D1_lat$Pz_lat, probs=c(.25, .75), na.rm = FALSE)
+iqr <- IQR(D1_lat$Pz_lat)
+D1_lat <- subset(D1_lat, D1_lat$Pz_lat > (Q[1] - 1.5*iqr) & D1_lat$Pz_lat < (Q[2]+1.5*iqr))
+
+plotNormalHistogram(D1_lat$Pz_lat) 
+shapiro.test(D1_lat$Pz_lat) # latencies are not normally distributed even after outlier correction
+
+D1_lat
+
+# ---- ERP amplitude data -------- 
+# remove Pz outliers by 1.5*IQR range
+Q <- quantile(D1$Pz, probs=c(.25, .75), na.rm = FALSE)
+iqr <- IQR(D1$Pz)
+D1 <- subset(D1, D1$Pz > (Q[1] - 1.5*iqr) & D1$Pz < (Q[2]+1.5*iqr))
+
+plotNormalHistogram(D1$Pz) 
+shapiro.test(D1$Pz) # normally distributed
+
+
+D1
+
+# Proportion of trials excluded based on Pz outliers
+# (717-705)/717 = 0.0167364
+```
+
+
+
+# Predicting P3 amplitudes with PCA component scores 
+```{r}
+D1$PCA <- D1$Q1 # select the component or Q1 here - only pca_c1 affected Pz amplitudes
+
+m0 <- lmer(Pz ~ 1 + (1 + cond | subj), data=D1, REML = FALSE)
+m1 <- lmer(Pz ~ cond + (1 + cond | subj), data=D1, REML = FALSE)
+m2 <- lmer(Pz ~ PCA + cond + (1 + cond | subj), data=D1, REML = FALSE)
+m3 <- lmer(Pz ~ PCA + cond + NT_ord + (1 + cond | subj), data=D1, REML = FALSE)
+m4 <- lmer(Pz ~ PCA + cond + NT_ord + run + (1 + cond | subj), data=D1, REML = FALSE)
+m5 <- lmer(Pz ~ PCA * cond + (1 + cond | subj), data=D1, REML = FALSE)
+m6 <- lmer(Pz ~ PCA * cond * NT_ord + (1 + cond | subj), data=D1, REML = FALSE)
+
+# compare models with likelihood ratio test
+anova(m0, m1, m2, m3, m4, test = "LRT")
+anova(m2, m5, test = "LRT")
+anova(m3, m6, test = "LRT")
+
+# pca1 & Q1 - m3 is the best model for 
+summary(m3 <- lmer(Pz ~ PCA + cond + NT_ord + (1 + cond | subj), data=D1))
+confint(m3, method = "Wald")
+
+```
+
+# Figure 5a: scatter plot Pz amplitude - RT 
+```{r}
+setEPS()
+postscript("plots/P3_amp_RT.eps")
+ggplot(SUM, aes(x=RT, y=Pz, color=cond)) + # need to open summary.RData
+  geom_point(size = 2) +
+  scale_color_manual(values = c('gray','gray28')) + 
+  geom_smooth(method = "lm") +
+  theme_void() +
+  theme_bw() 
+  
+dev.off()
+```
+
+
+# Figure 5b,c: scatter plot P3 - pca1
+```{r}
+DAT <- filter(D1, event == 22) # choose by task condition: 12 = 0-back, 22 = 1-back
+
+setEPS()
+postscript("plots/Pz_by_c1_1-back.eps")
+ggplot(DAT, aes(x=pca_c1, y=Pz))+
+ geom_point(colour = 'gray28', size = 2) + # colour: 'gray' = 0-back; 'gray28' = 1-back
+  geom_smooth(method = "lm", colour = 'gray28') + 
+  theme_void() +
+  theme_bw()
+
+dev.off()
+```
+
+## 4. Peak latency analysis
+
+# Predicting P3 latencies with task, session and elapsed time using an LMM 
+```{r}
+l0 <- lmer(Pz_latency ~ 1 + (1 + cond | subj), data=D1_NTord, REML = FALSE)
+l1 <- lmer(Pz_latency ~ cond + (1 + cond | subj), data=D1_NTord, REML = FALSE)
+l2 <- lmer(Pz_latency ~ cond + run + (1 + cond | subj), data=D1_NTord, REML = FALSE)
+l3 <- lmer(Pz_latency ~ cond + run + NT_ord + (1 + cond | subj), data=D1_NTord, REML = FALSE)
+l4 <- lmer(Pz_latency ~ cond * run + (1 + cond | subj), data=D1_NTord, REML = FALSE)
+l5 <- lmer(Pz_latency ~ cond * run * NT_ord + (1 + cond | subj), data=D1_NTord, REML = FALSE)
+
+# compare models with likelihood ratio test
+anova(l0, l1, l2, l3, test = "LRT")
+anova(l2, l4, test = "LRT") # compare interaction models to those with main effects
+anova(l3, l5, test = "LRT") 
+
+# l3 is the best model
+summary(l3 <- lmer(Pz_latency ~ cond + run + NT_ord + (1 + cond | subj), data=D1_NTord))
+confint(l3, method = "Wald") # create confidence intervals
+
+#investigate session main effect by releveling
+D1_NTord$run <- relevel(D1_NTord$run, 3)
+levels(D1_NTord$run) # check baseline 
+
+summary(l3.1 <- lmer(Pz_latency ~ cond + run + NT_ord + (1 + cond | subj), data=D1_NTord))
+confint(l3.1, method = "Wald") # create confidence intervals
+```
+
+# Descriptive results: latencies
+```{r}
+D1_NTord %>%
+  group_by(cond) %>% 
+  summarise(mean_lat = mean(Pz_latency),
+            sd_lat = sd(Pz_latency))
+
+D1_NTord %>%
+  group_by(run) %>% 
+  summarise(mean_lat = mean(Pz_latency),
+            sd_lat = sd(Pz_latency))
+```
+
+# Clean data for the following analysis
+```{r}
+# remove response data outliers first
+D2_NTord <- D1_NTord
+D2_NTord$RT <- D2_NTord$RT/10 # RTs to ms
+D2_NTord <- filter(D2_NTord, resp_code != -2) # exclude missing responses
+table(D2_NTord$resp_code)
+
+# remove RT outliers by 1.5*IQR range
+Q2 <- quantile(D2_NTord$RT, probs=c(.25, .75), na.rm = FALSE)
+iqr2 <- IQR(D2_NTord$RT)
+D2_NTord <- subset(D2_NTord, D2_NTord$RT > (Q2[1] - 1.5*iqr2) & D2_NTord$RT < (Q2[2]+1.5*iqr2))
+```
+
+# Predicting task performance (accuracy and RT) with P3 latencies 
+```{r}
+# ---------- accuracy ------------
+
+summary(acc.0 <- glmer(resp_code ~ Pz_latency + (1 + cond | subj), data = D2_NTord, family="binomial")) # P3 latency doesn't explain accuracy
+
+summary(acc.1 <- glmer(resp_code ~ run + cond + (1 + cond | subj), data=D2_NTord, family="binomial"))
+
+summary(acc.2 <- glmer(resp_code ~ Pz_latency + run + cond + (1 + cond | subj), data=D2_NTord, family="binomial"))
+
+anova(acc.1, acc.2)
+
+# ---------- RT ------------
+
+summary(rt.0 <- lmer(RT ~ Pz_latency + (1 + cond | subj), data=D2_NTord)) # P3 amplitude explains RTs
+confint(rt.0)
+
+summary(rt.1 <- lmer(RT ~ cond * NT_ord + (1 + cond | subj), data=D2_NTord)) # this model predicted RT data the best
+
+summary(rt.2 <- lmer(RT ~ Pz_latency + cond*NT_ord + (1 + cond | subj), data=D2_NTord)) 
+
+anova(rt.1, rt.2)
+```
+
+
+
+# Supplementary figure S3: Plot Pz latencies as a function of elapsed time and task separately for each session
+```{r}
+DAT <- filter(D1_NTord, run == 2) # choose by run
+
+# run custom function to extract standard error (SE) below first
+DAT.1 <- summarySE(DAT, measurevar="Pz_latency", groupvars=c("cond","NT_ord")) 
+DAT.1
+
+setEPS()
+postscript("plots/Pz_Lat_by_cond_NT_ord_session3.eps")
+ggplot(DAT.1, aes(x = NT_ord, y = Pz_latency, color=cond)) +
+  geom_errorbar(aes(ymin=Pz_latency-se, ymax=Pz_latency+se), width=.1) + 
+  scale_color_manual(values=c('darkgrey','black')) +
+  ylab("P3 latency (ms) - session3") +
+  xlab("Elapsed # trials") +
+  geom_line() +
+  geom_point() +
+  theme_void() +
+  theme_bw()
+
+dev.off()
+DAT
+```
+
+# Predicting TP-related P3 latencies with pca-component scores
+```{r}
+D1_lat$PCA <- D1_lat$pca_c4 # select the component here (!!) 
+
+summary(Pz_pca.0 <- lmer(Pz_lat ~ PCA + (1+cond | subj), data=D1_lat))
+confint(Pz_pca.0, method = "Wald")
+
+# continue analysis for pca_c4
+summary(Pz_pca.1 <- lmer(Pz_lat ~ PCA + cond + (1+cond | subj), data=D1_lat))
+anova(Pz_pca.0, Pz_pca.1) # adding condition didn't improve fit
+
+summary(Pz_pca.2 <- lmer(Pz_lat ~ PCA + run + (1+cond | subj), data=D1_lat))
+anova(Pz_pca.0, Pz_pca.2) # adding session didn't improve fit
+
+summary(Pz_pca.3 <- lmer(Pz_lat ~ PCA + NT_ord + (1+cond | subj), data=D1_lat))
+confint(Pz_pca.3, method = "Wald")
+anova(Pz_pca.0, Pz_pca.3) # adding elapsed time improved fit
+
+summary(Pz_pca.4 <- lmer(Pz_lat ~ PCA * NT_ord + (1+cond | subj), data=D1_lat))
+anova(Pz_pca.3, Pz_pca.4) # adding interaction didn't improve fit
+```
+
+
+
+
+# Custom function to extract standard error (SE) - run this before plotting
+```{r}
+summarySE <- function(data=NULL, measurevar, groupvars=NULL, na.rm=FALSE,
+                      conf.interval=.95, .drop=TRUE) {
+    library(plyr)
+
+    # New version of length which can handle NA's: if na.rm==T, don't count them
+    length2 <- function (x, na.rm=FALSE) {
+        if (na.rm) sum(!is.na(x))
+        else       length(x)
+    }
+
+    # This does the summary. For each group's data frame, return a vector with
+    # N, mean, and sd
+    datac <- ddply(data, groupvars, .drop=.drop,
+      .fun = function(xx, col) {
+        c(N    = length2(xx[[col]], na.rm=na.rm),
+          mean = mean   (xx[[col]], na.rm=na.rm),
+          sd   = sd     (xx[[col]], na.rm=na.rm)
+        )
+      },
+      measurevar
+    )
+
+    # Rename the "mean" column    
+    datac <- rename(datac, c("mean" = measurevar))
+
+    datac$se <- datac$sd / sqrt(datac$N)  # Calculate standard error of the mean
+
+    # Confidence interval multiplier for standard error
+    # Calculate t-statistic for confidence interval: 
+    # e.g., if conf.interval is .95, use .975 (above/below), and use df=N-1
+    ciMult <- qt(conf.interval/2 + .5, datac$N-1)
+    datac$ci <- datac$se * ciMult
+
+    return(datac)
+}
+```
