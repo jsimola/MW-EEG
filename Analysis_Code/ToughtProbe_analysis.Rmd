@@ -1,0 +1,350 @@
+---
+title: "MW-EEG project: Thought probe analyses"
+author: "J.Simola"
+date: "2022-09-28"
+output: html_document
+---
+
+```{r}
+library(lme4)
+library(lmerTest)
+library(readr)
+library(dplyr)
+library(sjPlot) # table functions
+library(lattice) # needed for qqmath
+library(rcompanion)
+library(Hmisc)
+library(ggplot2)
+```
+
+```{r}
+rm(list = ls()) # clear workspace
+```
+
+## Load data - open file thoughtprobe.RData 
+
+# Prepare Thought Probe data 
+```{r}
+TP <- TP[complete.cases(TP), ] # exclude NAs
+TP$cond <- factor(TP$event, labels = c("0 back","1 back")) # rename events
+TP$run <- factor(TP$run)
+TP <- filter(TP, NT_ord >= 2 & NT_ord <= 6)
+TP
+```
+
+# Descriptives for task focus data shown in Table 2
+```{r}
+TP %>% 
+  group_by(cond, run) %>% 
+  summarize(mean = mean(Q1),
+            sd = sd(Q1))
+```
+
+
+# Predicting task focus using an LMM - forward selection heuristic
+```{r}
+summary(taskFoc.1 <- glmer(Q1 ~ cond + (1 + cond | subj), data=TP, family=poisson))
+isSingular(taskFoc.1) # TRUE
+
+summary(taskFoc.2 <- glmer(Q1 ~ cond + (1 + cond || subj), data=TP, family=poisson)) # drop correlation from random effect
+isSingular(taskFoc.2) # TRUE
+
+# both models above are singular - remove slopes for condition from random effects
+summary(taskFoc.3 <- glmer(Q1 ~ cond + (1 | subj), data=TP, family=poisson)) 
+isSingular(taskFoc.3) # FALSE
+confint(taskFoc.3, method = "Wald") # create confidence intervals
+
+summary(taskFoc.4 <- glmer(Q1 ~ run + cond + (1 | subj), data=TP, family=poisson)) 
+anova(taskFoc.3, taskFoc.4) # adding session does not improve fit
+
+summary(taskFoc.5 <- glmer(Q1 ~ run + cond + NT_ord + (1 | subj), data=TP, family=poisson)) 
+anova(taskFoc.3, taskFoc.5) # adding NT_ord does not improve fit
+
+```
+
+
+
+## Plot (Figure 2c)
+
+# Plot task focus reports as a function of time and task (Fig 2c)
+```{r}
+D1.0 <- summarySE(TP, measurevar="Q1", groupvars=c("NT_ord","cond")) # remember the run the summarySE function below!!
+D1.0
+
+setEPS()
+postscript("plots/Q1_by_cond_NT_ord.eps")
+ggplot(D1.0, aes(x = NT_ord, y = Q1, color=cond)) +
+  geom_errorbar(aes(ymin=Q1-se, ymax=Q1+se), width=.1) + 
+  scale_color_manual(values=c('darkgrey','black')) +
+  ylab("Task focus") +
+  xlab("Elapsed # trials") +
+  geom_line() +
+  geom_point() +
+  theme_void() +
+  theme_bw()
+```
+
+# look at the PCA component distributions
+```{r}
+plotNormalHistogram(TP$pca_c1) 
+qqnorm(TP$pca_c1)
+qqline(TP$pca_c1)
+
+plotNormalHistogram(TP$pca_c2) 
+qqnorm(TP$pca_c2)
+qqline(TP$pca_c2)
+
+plotNormalHistogram(TP$pca_c3) 
+qqnorm(TP$pca_c3)
+qqline(TP$pca_c3)
+
+plotNormalHistogram(TP$pca_c4) 
+qqnorm(TP$pca_c4)
+qqline(TP$pca_c4)
+```
+
+# PCA task effects
+```{r}
+summary(pca1 <- lmer(pca_c1 ~ cond + (1 + cond | subj), data=TP))
+confint(pca1, method = "Wald")
+
+summary(pca2 <- lmer(pca_c2 ~ cond + (1 + cond | subj), data=TP))
+confint(pca2, method = "Wald")
+
+summary(pca3 <- lmer(pca_c3 ~ cond + (1 + cond | subj), data=TP))
+confint(pca3, method = "Wald")
+
+summary(pca4 <- lmer(pca_c4 ~ cond + (1 + cond | subj), data=TP))
+confint(pca4, method = "Wald")
+isSingular(pca4) # TRUE - model is singular - remove slopes for condition from random effects
+
+summary(pca4.1 <- lmer(pca_c4 ~ cond + (1 | subj), data=TP))
+confint(pca4.1, method = "Wald")
+```
+
+
+# predicting the pca components using an LMM - forward selection heuristic - 6.9.2022
+```{r}
+TP$PCA <- TP$pca_c4 # choose component here!
+
+m0 <- lmer(PCA ~ 1 + (1 + cond | subj), data=TP, REML = FALSE)
+m1 <- lmer(PCA ~ cond + (1 + cond | subj), data=TP, REML = FALSE)
+m2 <- lmer(PCA ~ cond + run + (1 + cond | subj), data=TP, REML = FALSE)
+m3 <- lmer(PCA ~ cond + run + NT_ord + (1 + cond | subj), data=TP, REML = FALSE)
+m4 <- lmer(PCA ~ cond + NT_ord + (1 + cond | subj), data=TP, REML = FALSE)
+m5 <- lmer(PCA ~ cond * NT_ord + (1 + cond | subj), data=TP, REML = FALSE)
+m6 <- lmer(PCA ~ cond * run + (1 + cond | subj), data=TP, REML = FALSE)
+m7 <- lmer(PCA ~ cond * run * NT_ord + (1 + cond | subj), data=TP, REML = FALSE)
+
+# compare models with likelihood ratio test
+anova(m0, m1, m2, m3, test = "LRT")
+anova(m2, m6, test = "LRT") # compare interaction models to those with main effects
+anova(m4, m5, test = "LRT") 
+anova(m3, m7, test = "LRT") 
+
+# pca_c1: m5 is the best model 
+summary(m5 <- lmer(PCA ~ cond * NT_ord + (1 + cond | subj), data=TP))
+confint(m5, method = "Wald") # create confidence intervals        
+        
+# investigate cond x NT_ord interaction
+# do lmer for a different condition baseline 
+TP$cond <- relevel(TP$cond, 2)
+levels(TP$cond)
+
+summary(m5.1 <- lmer(PCA ~ cond * NT_ord + (1 + cond | subj), data=TP))
+confint(m5.1, method = "Wald") # create confidence intervals
+
+# pca_c2: m1 is the best model
+summary(m1 <- lmer(PCA ~ cond + (1 + cond | subj), data=TP))
+confint(m1, method = "Wald") # create confidence intervals 
+
+# pca_c3: m4 is the best model 
+summary(m4 <- lmer(PCA ~ cond + NT_ord + (1 + cond | subj), data=TP))
+confint(m4, method = "Wald") # create confidence intervals 
+
+# pca_c4: models are singular 
+# random slopes for condition at the level of participants were removed from the model
+
+m0 <- lmer(PCA ~ 1 + (1 | subj), data=TP, REML = FALSE)
+m1 <- lmer(PCA ~ cond + (1 | subj), data=TP, REML = FALSE)
+m2 <- lmer(PCA ~ cond + run + (1 | subj), data=TP, REML = FALSE)
+m3 <- lmer(PCA ~ cond + run + NT_ord + (1 | subj), data=TP, REML = FALSE)
+m4 <- lmer(PCA ~ cond + NT_ord + (1 | subj), data=TP, REML = FALSE)
+m5 <- lmer(PCA ~ cond * NT_ord + (1 | subj), data=TP, REML = FALSE)
+m6 <- lmer(PCA ~ cond * run + (1 | subj), data=TP, REML = FALSE)
+m7 <- lmer(PCA ~ cond * run * NT_ord + (1 | subj), data=TP, REML = FALSE)
+
+# compare models with likelihood ratio test
+anova(m0, m1, m2, m3, test = "LRT")
+anova(m2, m6, test = "LRT") # compare interaction models to those with main effects
+anova(m4, m5, test = "LRT") 
+anova(m3, m7, test = "LRT") 
+```
+
+# Write TP summary data a file 
+```{r}
+TP_summary <- 
+  TP %>% 
+  group_by(subj, run, cond) %>% 
+  summarise(pca1 = mean(pca_c1),
+            pca2 = mean(pca_c2),
+            pca3 = mean(pca_c3),
+            pca4 = mean(pca_c4))
+
+TP_summary
+write.csv(TP_summary,"/Users/jsimola/Documents/Opetus/Kogn_neuro_harjoituskurssi/R_analysis/data/pca_summary_220906.csv", row.names = FALSE)
+```
+
+## Load data - open file summary.RData (pca_summary_EDIT_220906.csv) 
+## Note! This file is manually edited based on behavioral and thought probe summary datasets
+
+
+# plot summary data distributions 
+```{r}
+plotNormalHistogram(SUM$pca1) 
+qqnorm(SUM$pca1)
+qqline(SUM$pca1)
+
+plotNormalHistogram(SUM$pca2) 
+qqnorm(SUM$pca2)
+qqline(SUM$pca2)
+
+plotNormalHistogram(SUM$pca3) 
+qqnorm(SUM$pca3)
+qqline(SUM$pca3)
+
+plotNormalHistogram(SUM$pca4) 
+qqnorm(SUM$pca4)
+qqline(SUM$pca4)
+
+plotNormalHistogram(SUM$acc) 
+qqnorm(SUM$acc)
+qqline(SUM$acc)
+
+plotNormalHistogram(SUM$RT) 
+qqnorm(SUM$RT)
+qqline(SUM$RT)
+```
+
+# compute correlations
+```{r}
+target1 <- c("0 back")
+target2 <- c("1 back")
+S_0back <-subset(SUM, cond %in% target1 )
+S_1back <-subset(SUM, cond %in% target2 )
+
+# Accuracy
+cor.test(S_0back$pca1, S_0back$acc, method = c("spearman"),exact=FALSE)
+cor.test(S_0back$pca2, S_0back$acc, method = c("spearman"),exact=FALSE)
+cor.test(S_0back$pca3, S_0back$acc, method = c("spearman"),exact=FALSE)
+cor.test(S_0back$pca4, S_0back$acc, method = c("spearman"),exact=FALSE)
+
+cor.test(S_1back$pca1, S_1back$acc, method = c("spearman"),exact=FALSE)
+cor.test(S_1back$pca2, S_1back$acc, method = c("spearman"),exact=FALSE) # sign
+cor.test(S_1back$pca3, S_1back$acc, method = c("spearman"),exact=FALSE)
+cor.test(S_1back$pca4, S_1back$acc, method = c("spearman"),exact=FALSE)
+
+# RT
+cor.test(S_0back$pca1, S_0back$RT, method = c("pearson"),exact=FALSE)
+cor.test(S_0back$pca2, S_0back$RT, method = c("pearson"),exact=FALSE)
+cor.test(S_0back$pca3, S_0back$RT, method = c("pearson"),exact=FALSE)
+cor.test(S_0back$pca4, S_0back$RT, method = c("pearson"),exact=FALSE)
+
+cor.test(S_1back$pca1, S_1back$RT, method = c("pearson"),exact=FALSE)
+cor.test(S_1back$pca2, S_1back$RT, method = c("pearson"),exact=FALSE)
+cor.test(S_1back$pca3, S_1back$RT, method = c("pearson"),exact=FALSE)
+cor.test(S_1back$pca4, S_1back$RT, method = c("pearson"),exact=FALSE)
+```
+
+# violin and line plots for PCA-components (Figure 3)
+```{r}
+TP$component <- TP$pca_c4 # define which component is plotted - change this!!
+TP <- TP[complete.cases(TP$component), ] # exclude NAs
+test_nas <- which(is.na(TP$component))
+
+
+setEPS()
+postscript("plots/pca_c4_violin.eps")
+p <- ggplot(TP, aes(x=cond, y=component, fill=cond)) +
+  scale_fill_manual(values=c('gray','gray28')) +
+  geom_violin(trim=FALSE, width=0.5) +
+  geom_boxplot(width=0.1, fill=NA, color="black") + # add boxplot to obtain medians and IQRs
+  theme_minimal() +
+  theme(aspect.ratio=5/3) 
+  
+p + labs(y = "c4", x = "")   
+
+dev.off()
+
+D1.0 <- summarySE(TP, measurevar="component", groupvars=c("NT_ord","cond")) # remember the run the summarySE function below!!
+D1.0
+
+setEPS()
+postscript("plots/c4_by_cond_NT_ord.eps")
+ggplot(D1.0, aes(x = NT_ord, y = component, color=cond)) +
+  geom_errorbar(aes(ymin=component-se, ymax=component+se), width=.1) + 
+  scale_color_manual(values=c('gray','gray28')) +
+  ylab("c4") +
+  xlab("Elapsed # trials") +
+  geom_line() +
+  geom_point() +
+  theme_void() +
+  theme_bw()
+
+dev.off()
+```
+
+# Plot task PCA scores as a function of time and task (Figure 3)
+```{r}
+D1.0 <- summarySE(TP, measurevar="Q1", groupvars=c("NT_ord","cond")) # remember the run the summarySE function below!!
+D1.0
+
+setEPS()
+postscript("/Users/jsimola/Documents/Opetus/Kogn_neuro_harjoituskurssi/R_analysis/plots/Q1_by_cond_NT_ord.eps")
+ggplot(D1.0, aes(x = NT_ord, y = Q1, color=cond)) +
+  geom_errorbar(aes(ymin=Q1-se, ymax=Q1+se), width=.1) + 
+  geom_line() +
+  geom_point() +
+  theme_void() +
+  theme_bw()
+```
+
+
+# Custom function to extract standard error (SE) - run this before plotting
+```{r}
+summarySE <- function(data=NULL, measurevar, groupvars=NULL, na.rm=FALSE,
+                      conf.interval=.95, .drop=TRUE) {
+    library(plyr)
+
+    # New version of length which can handle NA's: if na.rm==T, don't count them
+    length2 <- function (x, na.rm=FALSE) {
+        if (na.rm) sum(!is.na(x))
+        else       length(x)
+    }
+
+    # This does the summary. For each group's data frame, return a vector with
+    # N, mean, and sd
+    datac <- ddply(data, groupvars, .drop=.drop,
+      .fun = function(xx, col) {
+        c(N    = length2(xx[[col]], na.rm=na.rm),
+          mean = mean   (xx[[col]], na.rm=na.rm),
+          sd   = sd     (xx[[col]], na.rm=na.rm)
+        )
+      },
+      measurevar
+    )
+
+    # Rename the "mean" column    
+    datac <- rename(datac, c("mean" = measurevar))
+
+    datac$se <- datac$sd / sqrt(datac$N)  # Calculate standard error of the mean
+
+    # Confidence interval multiplier for standard error
+    # Calculate t-statistic for confidence interval: 
+    # e.g., if conf.interval is .95, use .975 (above/below), and use df=N-1
+    ciMult <- qt(conf.interval/2 + .5, datac$N-1)
+    datac$ci <- datac$se * ciMult
+
+    return(datac)
+}
+```
