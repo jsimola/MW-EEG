@@ -1,0 +1,106 @@
+---
+title: "MW-EEG project: Supplementary analysis"
+author: "J.Simola"
+date: "2022-10-11"
+output: html_document
+---
+
+# Test for different component rotations 
+
+```{r}
+library(lme4)
+library(lmerTest)
+library(readr)
+library(sjPlot) # table functions
+library(dplyr)
+library(ggplot2)
+library(rcompanion) # plot normal histogram
+library(emmeans) # follow-up analysis - pairwise comparisons for factors
+```
+
+```{r}
+rm(list = ls()) # clear workspace
+```
+
+## Load data - open file thoughtprobe.RData 
+
+# Prepare data for analysis 
+```{r}
+TP <- TP[complete.cases(TP), ] # exclude NAs
+TP$cond <- factor(TP$event, labels = c("0 back","1 back")) # rename events
+TP$run <- factor(TP$run)
+TP <- filter(TP, NT_ord >= 2 & NT_ord <= 6)
+
+# remove Pz outliers by 1.5*IQR range
+Q <- quantile(TP$Pz, probs=c(.25, .75), na.rm = FALSE)
+iqr <- IQR(TP$Pz)
+TP <- subset(TP, TP$Pz > (Q[1] - 1.5*iqr) & TP$Pz < (Q[2]+1.5*iqr))
+
+TP
+```
+
+# Task effects for oblimin rotated PCA-components (see S1. Principal component analysis (PCA) options)
+```{r}
+summary(pca1.ob <- lmer(pca_c1_ob ~ cond + (1+cond | subj), data=TP))
+confint(pca1.ob, method = "Wald")
+
+summary(pca2.ob <- lmer(pca_c2_ob ~ cond + (1+cond | subj), data=TP))
+confint(pca2.ob, method = "Wald")
+
+summary(pca3.ob <- lmer(pca_c3_ob ~ cond + (1+cond | subj), data=TP))
+confint(pca3.ob, method = "Wald")
+
+summary(pca4.ob <- lmer(pca_c4_ob ~ cond + (1 | subj), data=TP))
+confint(pca4.ob, method = "Wald")
+```
+
+# Predicting the oblimin rotated PCA-component scores using an LMM (see S1. Principal component analysis (PCA) options)
+```{r}
+TP$PCA <- D1$pca_c1_ob # Note! Select the component here (!!)
+
+m0 <- lmer(Pz ~ PCA + cond + (1 + cond | subj), data=TP, REML = FALSE)
+m1 <- lmer(Pz ~ PCA + cond + NT_ord + (1 + cond | subj), data=TP, REML = FALSE)
+m2 <- lmer(Pz ~ PCA + cond + run + (1 + cond | subj), data=TP, REML = FALSE)
+m3 <- lmer(Pz ~ PCA * cond * NT_ord + (1 + cond | subj), data=TP, REML = FALSE)
+
+# compare models with likelihood ratio test
+anova(m0, m1, m2, test = "LRT")
+anova(m1, m3, test = "LRT") # compare interaction models to those with main effects
+
+# pca_c1_ob: m2 is the best model 
+summary(m2 <- lmer(Pz ~ PCA + cond + NT_ord + (1 + cond | subj), data=TP))
+confint(m2, method = "Wald") # create confidence intervals   
+```
+
+# Task effects for the three-component PCA solution (see S2. Three-component PCA solution)
+```{r}
+summary(pca1.ob <- lmer(pca_c1_v3 ~ cond + (1+cond | subj), data=TP))
+confint(pca1.ob, method = "Wald")
+
+summary(pca2.ob <- lmer(pca_c2_v3 ~ cond + (1+cond | subj), data=TP))
+confint(pca2.ob, method = "Wald")
+
+summary(pca3.ob <- lmer(pca_c3_v3 ~ cond + (1+cond | subj), data=TP))
+confint(pca3.ob, method = "Wald")
+```
+
+# Predicting the component scores for the three-component PCA solution (see S2. Three-component PCA solution)
+```{r}
+TP$PCA <- D1$pca_c1_v3 # Note! Select the component here (!!)
+
+m0 <- lmer(Pz ~ cond + (1 + cond | subj), data=TP, REML = FALSE)
+m1 <- lmer(Pz ~ PCA + cond + (1 + cond | subj), data=TP, REML = FALSE)
+m2 <- lmer(Pz ~ PCA + cond + run + (1 + cond | subj), data=TP, REML = FALSE)
+m3 <- lmer(Pz ~ PCA + cond + NT_ord + (1 + cond | subj), data=TP, REML = FALSE)
+m4 <- lmer(Pz ~ PCA * cond * NT_ord + (1 + cond | subj), data=TP, REML = FALSE)
+
+# compare models with likelihood ratio test
+anova(m0, m1, m2, test = "LRT")
+anova(m1, m3, test = "LRT")
+anova(m3, m4, test = "LRT") # compare interaction models to those with main effects
+
+# pca_c1_v3: m3 is the best model 
+summary(m3 <- lmer(Pz ~ PCA + cond + NT_ord + (1 + cond | subj), data=TP))
+confint(m3, method = "Wald") # create confidence intervals   
+```
+
